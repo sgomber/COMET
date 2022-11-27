@@ -26,8 +26,8 @@ def make_data(configurations):
         print("Please provide path to test and train csv files")
         sys.exit(0)
 
-    trainY = trainX.pop('car_purchase_amount')
-    testY = testX.pop('car_purchase_amount')
+    trainY = trainX.pop('HousePrice')
+    testY = testX.pop('HousePrice')
 
     train_dataset.append(trainX)
     test_dataset.append(testX)
