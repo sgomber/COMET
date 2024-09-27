@@ -56,8 +56,7 @@ def update_batch (model, layer_size, batch_data, batch_label, data_dir, batch_si
 
 def output(model, datapoint):
     x_point = pd.DataFrame(datapoint)
-    return model.predict(x_point.transpose())
-
+    return model.predict(x_point.transpose(), verbose = 0)
 
 def getMinMaxRangeOfFeatures(dataset, column_names):
     min_max = {}

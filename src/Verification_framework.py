@@ -15,6 +15,7 @@ import pandas as pd
 import multiprocessing
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import csv 
 
 from typing import List
 from ast import literal_eval
@@ -102,11 +103,16 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
         NN_model.save(getConfigurations()['weight_files']+"model_0.h5")
         isRetrainWCG = True
         print_count = 0
+
+        print("Getting counter examples in test data...")
+
+        print("Upper cegs..")
         start_env_time = time.time()
         no_cg_upper = collectEnvelopeMetric(NN_model, test_data, test_labels, log, monotonic_index, fold, "upper", "test",counter_example_generator_upper,print_count)
         elapse_env_time = time.time() - start_env_time
         writeTimeToFile(time.strftime("%H:%M:%S", time.gmtime(elapse_env_time)),fold,"Test Upper Envelope time : ")
 
+        print("Lower cegs..")
         start_env_time = time.time()
         no_cg_lower = collectEnvelopeMetric(NN_model, test_data, test_labels, log, monotonic_index, fold, "lower", "test",counter_example_generator_lower,print_count)
         elapse_env_time = time.time() - start_env_time
@@ -114,20 +120,27 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
 
         isNoViolationTest = False
         no_cg = no_cg_upper + no_cg_lower
+
+        print("Test Counter egs: " , no_cg, "(", no_cg_upper, no_cg_lower, ")")
+
         if no_cg == 0:
             isNoViolationTest = True
 
+        print("Getting counter examples in train data...")
+
+        print("Upper cegs..")
         start_env_time = time.time()
-        no_cg_upper = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "upper", "train", counter_example_generator_upper,print_count)
+        no_cg_upper_train = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "upper", "train", counter_example_generator_upper,print_count)
         elapse_env_time = time.time() - start_env_time
         writeTimeToFile(time.strftime("%H:%M:%S", time.gmtime(elapse_env_time)),fold,"Train Upper Envelope time : ")
 
+        print("Lower cegs..")
         start_env_time = time.time()
-        no_cg_lower = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "lower", "train", counter_example_generator_lower,print_count)
+        no_cg_lower_train = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "lower", "train", counter_example_generator_lower,print_count)
         elapse_env_time = time.time() - start_env_time
         writeTimeToFile(time.strftime("%H:%M:%S", time.gmtime(elapse_env_time)),fold,"Train Lower Envelope time : ")
 
-        no_cg = no_cg_upper + no_cg_lower
+        no_cg = no_cg_upper_train + no_cg_lower_train
 
         isNoViolationTrain = False
 
@@ -135,10 +148,25 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
             isNoViolationTrain = True
             isRetrainWCG = False
 
+        print("Train Counter egs: " , no_cg, "(", no_cg_upper_train, no_cg_lower_train, ")")
+
+        columns = ["Train_Upper", "Train_Lower", "Test_Upper", "Test_Lower"]
+        results_file = getConfigurations()["result_files"] + "counter_example_counter.csv"
+
+        with open(results_file, "w") as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(columns)
+ 
+        with open(results_file, "a") as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow([str(no_cg_upper_train), str(no_cg_lower_train), str(no_cg_upper), str(no_cg_lower)])
+
         setConfigurations("scalability", False)
         if getConfigurations()['counter_example_type'] == "cg" and getConfigurations()['retrain_model']:
             logging.debug('Counter Example Learning')
-            print('Counter Example Learning')
+            print('Counter Example Learning Starts ->')
+            # print(getConfigurations()['number_of_epochs'])
+            # return
             for epoch in range(0,getConfigurations()['number_of_epochs']):
                 if not isRetrainWCG:
                     logging.debug('No violations in train and test!')
@@ -157,15 +185,27 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
                     temp_batch_count = temp_batch_count+1
 
                     logging.debug('Progress... batch/batches:%d/%d'%(temp_batch_count,len(batches)))
+                    print('At batch/batches:%d/%d'%(temp_batch_count,len(batches)), "Epoch: ", epoch)
+
                     counter_batch = []
                     batch_labels = []
                     count = 0
                     num_cores = int(getConfigurations()['num_cores'])
                     all_results = []
+
+                    print("Finding cgs for the batch...")
+                    # Get both upper and lower counter eg for all points in this batch
                     with Parallel(n_jobs=num_cores) as parallel:
                         results = parallel(delayed(get_counter_example_u_l)(train_data.iloc[data_index].values, monotonic_index, data_index, output(NN_model, train_data.iloc[data_index].values)[0][0], fold) for data_index in batch)
                         all_results.extend(results)
 
+                    # print(all_results[0])
+                    # print(len(all_results))
+
+                    K = float(0.31322283272283263)/7
+                    shouldUseMyWay = False
+
+                    # Process the counter examples!!
                     for res in results:
                         try:
                             count = count+1
@@ -175,6 +215,7 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
                                 sys.exit(0)
                             data_point = train_data.iloc[ind_u].values
                             logging.debug('CounterExample Progress... count/batchsize:%d/%d'%(count,len(batch)))
+                            print('CounterExample Progress... count/batchsize:%d/%d'%(count,len(batch)))
 
                             counter_examples = []
 
@@ -193,8 +234,9 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
                                         f_x_cgs.append(output(NN_model, counter_example)[0][0])
                                 avg_f_x = 1.0*sum(f_x_cgs)/len(f_x_cgs)
 
-                            counter_batch.append(data_point)
-                            batch_labels.append(avg_f_x)
+                            if not shouldUseMyWay:
+                                counter_batch.append(data_point)
+                                batch_labels.append(avg_f_x)
 
                             for counter_example in counter_examples:
                                 if counter_example is None:
@@ -202,10 +244,17 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
                                 else:
                                     counter_example_count = counter_example_count+1
                                     counter_batch.append(counter_example)
-                                    batch_labels.append(avg_f_x)
+                                    if not shouldUseMyWay:
+                                        batch_labels.append(avg_f_x)
+                                    else:
+                                        output_val = output(NN_model, data_point)[0][0]
+                                        # print(output_val)
+                                        # print("HI", output_val + K * (counter_example[4] - data_point[4]))
+                                        batch_labels.append(output_val + K * (counter_example[4] - data_point[4]))
                         except:
                             print("Exception while processing counterexample " + sys.exc_info()[0])
                             sys.exit(0)
+
                     original_train = train_data
                     original_label = train_labels
 
@@ -229,23 +278,33 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
 
                     batch_index+=1
 
+                print("Here!")
+
                 logging.debug("The model after epoch "+str(epoch))
                 logging.debug(evaluate_model(NN_model, train_data,train_labels,getConfigurations(),evaluate))
                 # Save the model after each epoch
                 NN_model.save(getConfigurations()['weight_files']+"model_"+str(epoch+1)+".h5")
                 # Logging metrics after each epoch:
                 print_count = epoch+1
+
+                print("Finding updated number of CGS...")
                 no_cg_upper = collectEnvelopeMetric(NN_model, test_data, test_labels, log, monotonic_index, fold, "upper", "test",counter_example_generator_upper, print_count)
 
                 no_cg_lower = collectEnvelopeMetric(NN_model, test_data, test_labels, log, monotonic_index, fold, "lower", "test",counter_example_generator_lower, print_count)
 
 
-                no_cg_upper = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "upper", "train", counter_example_generator_upper, print_count)
+                no_cg_upper_train = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "upper", "train", counter_example_generator_upper, print_count)
 
-                no_cg_lower = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "lower", "train", counter_example_generator_lower, print_count)
+                no_cg_lower_train = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "lower", "train", counter_example_generator_lower, print_count)
 
+
+                print(no_cg_upper, no_cg_lower, no_cg_upper_train, no_cg_lower_train)
                 no_cg = no_cg_upper + no_cg_lower
 
+                with open(results_file, "a") as csvfile:
+                    csvwriter = csv.writer(csvfile)
+                    csvwriter.writerow([str(no_cg_upper_train), str(no_cg_lower_train), str(no_cg_upper), str(no_cg_lower)])
+                
                 if no_cg == 0:
                     isRetrainWCG = False
 
@@ -291,18 +350,20 @@ def verification(data_path, log_file, n_folds, monotonic_indices):
 
                     no_cg_upper = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "upper", "train", counter_example_generator_upper, print_count)
 
-                    no_cg_lower = collectEnvelopeMetric(NN_model, train_data, train_labels, log, monotonic_index, fold, "lower", "train", counter_example_generator_lower, print_count)
 
                 pair_count = pair_count + 1
 
         elapsed_time = time.time() - start_time
-        print("total elapsetime is: ")
-        print(time.strftime("%H:%M:%S", time.gmtime(elapsed_time)))
+        # print("total elapsetime is: ")
+        # print(time.strftime("%H:%M:%S", time.gmtime(elapsed_time)))
         writeTimeToFile(time.strftime("%H:%M:%S", time.gmtime(elapsed_time)),fold)
         average_time = 0.0
         if len(solver_times) > 0:
-            average_time =cl (sum(solver_times) / len(solver_times))
+            average_time = (sum(solver_times) / len(solver_times))
         writeTimeToFile(time.strftime("%H:%M:%S", time.gmtime(average_time)),fold,"Average Time taken to solve each query by solver "+getConfigurations()['solver_name'])
+
+def get_K_factor_from_data():
+    return 1
 
 def get_monoticity_direction(monotonic_index):
     index = getConfigurations()['monotonic_indices'].index(str(monotonic_index))
@@ -459,6 +520,10 @@ def setupfolders():
     makeDir(weight_files_path)
     setConfigurations('weight_files',weight_files_path)
 
+    results_file_path = run_data_dir + "results/"
+    makeDir(results_file_path)
+    setConfigurations('result_files',results_file_path)
+
 def setConfigurations (key,value):
     global configurations
     configurations[key] = value
@@ -470,7 +535,7 @@ def getConfigurations ():
 def monotonicity_verification():
     if int(getConfigurations()['solve_separate']) == 1:
         for m in getConfigurations()['monotonic_indices']:
-            dirname = datetime.now().strftime('%Y%m%d')+ str(datetime.now().hour)
+            dirname = datetime.now().strftime('%Y%m%d')+ str(datetime.now())
             run_data_dir = getConfigurations()['run_data_path']+ getConfigurations()['current_benchmark'] +"/" + getConfigurations()['column_names'][int(m)]+"/"+dirname +"/"
             makeDir(run_data_dir,True)
             setConfigurations('run_data_path',run_data_dir)
@@ -478,7 +543,7 @@ def monotonicity_verification():
             configurations = getConfigurations()
             verification(configurations['model_dir'], configurations['log_files'], configurations['n_folds'], getConfigurations()['monotonic_indices'])
     else:
-        dirname = datetime.now().strftime('%Y%m%d')+ str(datetime.now().hour)
+        dirname = datetime.now().strftime('%Y%m%d')+ str(datetime.now())
         dir_col_string = "Combination"
         for m in getConfigurations()['monotonic_indices']:
             dir_col_string = dir_col_string + "+" + getConfigurations()['column_names'][int(m)]
